@@ -28,7 +28,6 @@ int main(int argc, char **argv)
             continue;
 
         snprintf(path, sizeof(path), "%s/%s", argv[1], dp->d_name);
-
         if (stat(path, &st) == -1) {
             perror("stat");
             continue;
