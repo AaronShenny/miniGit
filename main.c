@@ -4,6 +4,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <direct.h>
 
 /* run this program using the console pauser or add your own getch, system("pause") or input loop */
 
@@ -73,12 +74,12 @@ int main(int argc, char *argv[]) {
 	if ( strcmp(argv[1], "init") == 0){
 		int check = checkdir();
 		if (check==1){
-			mkdir(".bit", 0755);
-			mkdir(".bit/objects", 0755);
-			mkdir(".bit/objects/blobs", 0755);
-			mkdir(".bit/objects/trees", 0755);
-			mkdir(".bit/commits", 0755);
-			
+			mkdir(".bit");
+			mkdir(".bit/objects");
+			mkdir(".bit/objects/blobs");
+			mkdir(".bit/objects/trees");
+			mkdir(".bit/commits");
+
 			FILE *fp = fopen(".bit/HEAD", "w");
 			fclose(fp);
 			FILE *fp2 = fopen(".bit/activity.log", "w");
