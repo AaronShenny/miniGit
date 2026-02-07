@@ -1,102 +1,132 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <dirent.h>
 #include <errno.h>
-#include <sys/stat.h>
-#include <direct.h>
+#include <dirent.h>
 
-/* run this program using the console pauser or add your own getch, system("pause") or input loop */
+#ifdef _WIN32
+    #include <direct.h>   // _mkdir
+#else
+    #include <sys/stat.h>
+    #include <sys/types.h>
+#endif
 
-int  checkdir(){
-	errno = 0;
-	DIR* dir = opendir(".bit");
-	if (dir) {
-	    //printf("Exists\n");
-	    
-	    closedir(dir);
-	    return 0;
-	} else if (ENOENT == errno) {
-	    //printf("Directory not exits\n");
-	    return 1;
-	} else {
-	   //printf("Error");
-	   return -1;
-	}
-
+/* ---------- Cross-platform mkdir wrapper ---------- */
+int make_dir(const char *path) {
+#ifdef _WIN32
+    return _mkdir(path);
+#else
+    return mkdir(path, 0755);
+#endif
 }
 
-int hash_file(char fileinput[]){
-	//hash the file and return the hash value
-	int hash = 5381;
-	FILE *fp = fopen(fileinput, "rb");
-	if (fp == NULL) {
-		printf("Error opening file: %s\n", fileinput);
-		return -1;
-	}
-	int c;
-	while ((c = fgetc(fp)) != EOF) {
-		hash =  hash * 33 + c ;
-	}
-	fclose(fp);
-	return hash;
-}
-// need a hand
-void store_blob(char fileinput[]){
-	int hash = hash_file(fileinput);
-	char path[100];
-	sprintf(path, ".bit/objects/blobs/%d", hash);
-	FILE *fp = fopen(path, "wb");
-	if (fp == NULL) {
-		printf("Error opening file: %s\n", path);
-		return;
-	}
-	FILE *input_fp = fopen(fileinput, "rb");
-	if (input_fp == NULL) {
-		printf("Error opening file: %s\n", fileinput);
-		fclose(fp);
-		return;
-	}
-	int c;
-	while ((c = fgetc(input_fp)) != EOF) {
-		fputc(c, fp);
-	}
-	fclose(fp);
-	fclose(input_fp);
+/* ---------- Check if .bit directory exists ---------- */
+int checkdir() {
+    errno = 0;
+    DIR *dir = opendir(".bit");
+    if (dir) {
+        closedir(dir);
+        return 0;   // exists
+    } else if (errno == ENOENT) {
+        return 1;   // does not exist
+    } else {
+        return -1;  // error
+    }
 }
 
+/* ---------- djb2 hash for file ---------- */
+unsigned long hash_file(const char *filepath) {
+    unsigned long hash = 5381;
+    FILE *fp = fopen(filepath, "rb");
+    if (!fp) {
+        return 0;
+    }
+
+    int c;
+    while ((c = fgetc(fp)) != EOF) {
+        hash = ((hash << 5) + hash) + c;  // hash * 33 + c
+    }
+
+    fclose(fp);
+    return hash;
+}
+
+/* ---------- Store blob with deduplication ---------- */
+void store_blob(const char *filepath) {
+    unsigned long hash = hash_file(filepath);
+    if (hash == 0) return;
+
+    char blob_path[256];
+    sprintf(blob_path, ".bit/objects/blobs/%lu", hash);
+
+    /* Check if blob already exists */
+    FILE *test = fopen(blob_path, "rb");
+    if (test) {
+        fclose(test);
+        return;   // blob already stored
+    }
+
+    FILE *src = fopen(filepath, "rb");
+    FILE *dst = fopen(blob_path, "wb");
+
+    if (!src || !dst) {
+        if (src) fclose(src);
+        if (dst) fclose(dst);
+        return;
+    }
+
+    int c;
+    while ((c = fgetc(src)) != EOF) {
+        fputc(c, dst);
+    }
+
+    fclose(src);
+    fclose(dst);
+}
+
+/* ---------- MAIN ---------- */
 int main(int argc, char *argv[]) {
-	
-	if(argc<2){
-		printf("bit: <usage>");
-		return 1;
-	}
-	if ( strcmp(argv[1], "init") == 0){
-		int check = checkdir();
-		if (check==1){
-			mkdir(".bit");
-			mkdir(".bit/objects");
-			mkdir(".bit/objects/blobs");
-			mkdir(".bit/objects/trees");
-			mkdir(".bit/commits");
 
-			FILE *fp = fopen(".bit/HEAD", "w");
-			fclose(fp);
-			FILE *fp2 = fopen(".bit/activity.log", "w");
-			fclose(fp2);
-			printf("bit: Initialized an empty repository.\n");
+    if (argc < 2) {
+        printf("bit: <usage>\n");
+        printf("bit init\n");
+        return 1;
+    }
 
-		}
-		else if (check==0){
-			printf("bit: Already initialized an empty repository\n");
-		}
-		else if (check==-1){
-			printf("bit: Error in initializing..\n");
-		}
-		
-	}
-	else{
-		printf("bit: Unknown Command! Please use `bit help`\n");
-	}
-	return 0;
+    /* ---------- INIT COMMAND ---------- */
+    if (strcmp(argv[1], "init") == 0) {
+
+        int status = checkdir();
+
+        if (status == 0) {
+            printf("bit: Repository already initialized.\n");
+            return 0;
+        }
+
+        if (status == -1) {
+            printf("bit: Error checking repository.\n");
+            return 1;
+        }
+
+        /* Create repository structure */
+        make_dir(".bit");
+        make_dir(".bit/objects");
+        make_dir(".bit/objects/blobs");
+        make_dir(".bit/objects/trees");
+        make_dir(".bit/commits");
+
+        FILE *head = fopen(".bit/HEAD", "w");
+        if (head) fclose(head);
+
+        FILE *log = fopen(".bit/activity.log", "w");
+        if (log) fclose(log);
+
+        printf("bit: Initialized empty repository.\n");
+        return 0;
+    }
+
+    /* ---------- UNKNOWN COMMAND ---------- */
+    printf("bit: Unknown command. Use `bit init`\n");
+    return 1;
 }
+
