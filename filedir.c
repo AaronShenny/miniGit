@@ -9,7 +9,6 @@ int main(int argc, char **argv)
     struct dirent *dp;
     struct stat st;
     char path[4096];
-
     if (argc != 2) {
         fprintf(stderr, "Usage: %s <directory>\n", argv[0]);
         return 1;
