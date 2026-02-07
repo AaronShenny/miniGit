@@ -11,6 +11,15 @@
     #include <sys/types.h>
 #endif
 
+typedef struct TreeNode {
+    char name[256];               // file or folder name
+    int is_file;                  // 1 = file, 0 = directory
+    unsigned long blob_hash;      // valid only if file
+    struct TreeNode *child;       // first child
+    struct TreeNode *sibling;     // next node in same directory
+} TreeNode;
+
+
 /* ---------- Cross-platform mkdir wrapper ---------- */
 int make_dir(const char *path) {
 #ifdef _WIN32
@@ -83,6 +92,12 @@ void store_blob(const char *filepath) {
     fclose(src);
     fclose(dst);
 }
+
+TreeNode* build_tree(const char *filepath){
+	
+}
+
+
 
 /* ---------- MAIN ---------- */
 int main(int argc, char *argv[]) {
