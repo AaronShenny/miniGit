@@ -95,8 +95,43 @@ void store_blob(const char *filepath) {
     fclose(dst);
 }
 
-TreeNode* build_tree(const char *filepath){
-	
+TreeNode* build_tree(const char *base_path){
+	DIR *dirp;
+    struct dirent *dp;
+    struct stat st;
+    char path[4096];
+
+    dirp = opendir(base_path);
+    if (!dirp) {
+        perror("opendir");
+        return;
+    }
+
+    while ((dp = readdir(dirp)) != NULL) {
+        if (strcmp(dp->d_name, ".") == 0 ||
+            strcmp(dp->d_name, "..") == 0 || strcmp(dp->d_name, ".git") == 0 || dp->d_name[0] =='.')
+            continue;
+
+        snprintf(path, sizeof(path), "%s/%s", base_path, dp->d_name);
+
+        if (stat(path, &st) == -1) {
+            perror("stat");
+            continue;
+        }
+
+        if (S_ISDIR(st.st_mode)) {
+            //printf("[DIR ] %s\n", path);
+            build_tree(path);
+        }
+        else if (S_ISREG(st.st_mode)) {
+            //TreeNode 
+        }
+        else {
+            //printf("[OTHER] %s\n", path);
+        }
+    }
+
+    closedir(dirp);
 }
 
 

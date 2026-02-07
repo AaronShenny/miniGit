@@ -18,7 +18,7 @@ static void list_entries(const char *base_path)
 
     while ((dp = readdir(dirp)) != NULL) {
         if (strcmp(dp->d_name, ".") == 0 ||
-            strcmp(dp->d_name, "..") == 0)
+            strcmp(dp->d_name, "..") == 0 || strcmp(dp->d_name, ".git") == 0 || dp->d_name[0] =='.')
             continue;
 
         snprintf(path, sizeof(path), "%s/%s", base_path, dp->d_name);
