@@ -20,6 +20,8 @@ typedef struct TreeNode {
 } TreeNode;
 
 
+void isdir(const)
+
 /* ---------- Cross-platform mkdir wrapper ---------- */
 int make_dir(const char *path) {
 #ifdef _WIN32
