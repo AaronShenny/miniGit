@@ -40,7 +40,7 @@ int hash_file(char fileinput[]){
 	fclose(fp);
 	return hash;
 }
-
+// need a hand
 void store_blob(char fileinput[]){
 	int hash = hash_file(fileinput);
 	char path[100];
