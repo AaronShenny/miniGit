@@ -95,7 +95,7 @@ int main(int argc, char *argv[]) {
 		
 	}
 	else{
-		printf("bit: Unknown Command! Please use bit help\n");
+		printf("bit: Unknown Command! Please use `bit help`\n");
 	}
 	return 0;
 }
