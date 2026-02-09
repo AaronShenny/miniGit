@@ -7,10 +7,10 @@
 
 #ifdef _WIN32
     #include <direct.h>   // _mkdir
-#else
-    #include <sys/stat.h>
-    #include <sys/types.h>
 #endif
+
+#include <sys/stat.h>
+#include <sys/types.h>
 typedef struct TreeNode {
     char name[256];               // file or folder name
     int is_file;                  // 1 = file, 0 = directory
