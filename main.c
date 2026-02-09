@@ -40,6 +40,13 @@ int make_dir(const char *path) {
     return mkdir(path, 0755);
 #endif
 }
+void ensure_dir(const char *path) {
+    #ifdef _WIN32
+        _mkdir(path);
+    #else
+        mkdir(path, 0755);
+    #endif
+}
 
 /* ---------- Check if .bit directory exists ---------- */
 int checkdir() {
@@ -147,6 +154,26 @@ Commit* create_commit(const char *message, TreeNode *tree){
 
     return commit;
 }
+void print_commit(const char *commit_id) {
+    char path[256];
+    snprintf(path, sizeof(path), ".bit/commits/%s.txt", commit_id);
+
+    FILE *fp = fopen(path, "r");
+    if (!fp) {
+        printf("error: cannot open commit %s\n", commit_id);
+        return;
+    }
+
+    char line[512];
+    while (fgets(line, sizeof(line), fp)) {
+        if (strncmp(line, "Tree Snapshot:", 14) == 0)
+            break;  // skip tree details in log
+        printf("%s", line);
+    }
+    printf("\n");
+
+    fclose(fp);
+}
 
 TreeNode* build_tree(const char *base_path) {
     DIR *dirp;
@@ -250,6 +277,74 @@ void print_tree(TreeNode *node, int depth) {
         }
     }
 }
+void restore_commit(const char *commit_id) {
+    char path[256];
+    snprintf(path, sizeof(path), ".bit/commits/%s.txt", commit_id);
+
+    FILE *fp = fopen(path, "r");
+    if (!fp) {
+        printf("bit: commit not found\n");
+        return;
+    }
+
+    char line[512];
+    char cwd[4096] = "";
+
+    while (fgets(line, sizeof(line), fp)) {
+        if (line[0] == 'D' || line[0] == 'F')
+            break;
+    }
+
+    do {
+        int depth = 0;
+        while (line[depth * 2] == ' ')
+            depth++;
+
+        char type;
+        char name[256];
+        unsigned long hash = 0;
+
+        if (line[depth * 2] == 'F') {
+            sscanf(line + depth * 2, "F %255s %lu", name, &hash);
+        } else {
+            sscanf(line + depth * 2, "D %255s", name);
+        }
+
+        char fullpath[4096];
+        if (strlen(cwd) + strlen(name) + 2 >= sizeof(fullpath)) {
+            printf("bit: path too long, skipping %s\n", name);
+            continue;
+        }
+
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", cwd, name);
+
+
+        if (line[depth * 2] == 'D') {
+            ensure_dir(fullpath);
+            strcpy(cwd, fullpath);
+        } else {
+            char blobpath[256];
+            snprintf(blobpath, sizeof(blobpath), ".bit/objects/blobs/%lu", hash);
+
+            FILE *src = fopen(blobpath, "rb");
+            FILE *dst = fopen(fullpath, "wb");
+
+            if (src && dst) {
+                int c;
+                while ((c = fgetc(src)) != EOF)
+                    fputc(c, dst);
+            }
+
+            if (src) fclose(src);
+            if (dst) fclose(dst);
+        }
+
+    } while (fgets(line, sizeof(line), fp));
+
+    fclose(fp);
+}
+
+
 
 /* ---------- MAIN ---------- */
 int main(int argc, char *argv[]) {
@@ -348,6 +443,63 @@ int main(int argc, char *argv[]) {
         printf("bit: Committed changes (not fully implemented).\n");
         return 0;
     }
+    else if (strcmp(argv[1], "log") == 0) {
+        if (checkdir() != 0) {
+            printf("bit: Not a bit repository.\n");
+            return 1;
+        }
+
+        FILE *head = fopen(".bit/HEAD", "r");
+        if (!head) {
+            printf("bit: No commits yet.\n");
+            return 0;
+        }
+
+        char current_id[41];
+        if (!fgets(current_id, sizeof(current_id), head)) {
+            fclose(head);
+            printf("bit: No commits yet.\n");
+            return 0;
+        }
+        fclose(head);
+
+        current_id[strcspn(current_id, "\n")] = 0;
+
+        while (strcmp(current_id, "None") != 0) {
+            print_commit(current_id);
+
+            char path[256];
+            snprintf(path, sizeof(path), ".bit/commits/%s.txt", current_id);
+            FILE *fp = fopen(path, "r");
+            if (!fp) break;
+
+            char line[512];
+            char parent[41] = "None";
+
+            while (fgets(line, sizeof(line), fp)) {
+                if (strncmp(line, "Parent Commit:", 14) == 0) {
+                    sscanf(line, "Parent Commit: %40s", parent);
+                    break;
+                }
+            }
+
+            fclose(fp);
+            strcpy(current_id, parent);
+        }
+
+        return 0;
+    }
+    else if (strcmp(argv[1], "restore") == 0) {
+        if (argc < 3) {
+            printf("Usage: bit restore <commit_id>\n");
+            return 1;
+        }
+        restore_commit(argv[2]);
+        printf("bit: Restore complete.\n");
+        return 0;
+    }
+
+
     /* ---------- UNKNOWN COMMAND ---------- */
     printf("bit: Unknown command. Use `bit init`\n");
     return 1;
