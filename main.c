@@ -8,6 +8,13 @@
 #ifdef _WIN32
     #include <direct.h>   // _mkdir
 #endif
+void ensure_dir(const char *path) {
+    #ifdef _WIN32
+        _mkdir(path);
+    #else
+        mkdir(path, 0755);
+    #endif
+}
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -40,13 +47,7 @@ int make_dir(const char *path) {
     return mkdir(path, 0755);
 #endif
 }
-void ensure_dir(const char *path) {
-    #ifdef _WIN32
-        _mkdir(path);
-    #else
-        mkdir(path, 0755);
-    #endif
-}
+
 
 /* ---------- Check if .bit directory exists ---------- */
 int checkdir() {
@@ -278,53 +279,59 @@ void print_tree(TreeNode *node, int depth) {
     }
 }
 void restore_commit(const char *commit_id) {
-    char path[256];
-    snprintf(path, sizeof(path), ".bit/commits/%s.txt", commit_id);
+    char commit_path[256];
+    snprintf(commit_path, sizeof(commit_path),
+             ".bit/commits/%s.txt", commit_id);
 
-    FILE *fp = fopen(path, "r");
+    FILE *fp = fopen(commit_path, "r");
     if (!fp) {
         printf("bit: commit not found\n");
         return;
     }
 
     char line[512];
-    char cwd[4096] = "";
+    char dir_stack[50][4096];   // stack of directories by depth
+    int max_depth = 0;
 
+    // Skip metadata until tree starts
     while (fgets(line, sizeof(line), fp)) {
         if (line[0] == 'D' || line[0] == 'F')
             break;
     }
 
     do {
-        int depth = 0;
-        while (line[depth * 2] == ' ')
-            depth++;
+        int spaces = 0;
+        while (line[spaces] == ' ')
+            spaces++;
+
+        int depth = spaces / 2;
 
         char type;
         char name[256];
         unsigned long hash = 0;
 
-        if (line[depth * 2] == 'F') {
-            sscanf(line + depth * 2, "F %255s %lu", name, &hash);
+        if (line[spaces] == 'D') {
+            sscanf(line + spaces, "D %255s", name);
         } else {
-            sscanf(line + depth * 2, "D %255s", name);
+            sscanf(line + spaces, "F %255s %lu", name, &hash);
         }
 
         char fullpath[4096];
-        if (strlen(cwd) + strlen(name) + 2 >= sizeof(fullpath)) {
-            printf("bit: path too long, skipping %s\n", name);
-            continue;
+
+        if (depth == 0) {
+            snprintf(fullpath, sizeof(fullpath), "%s", name);
+        } else {
+            snprintf(fullpath, sizeof(fullpath), "%s/%s",
+                     dir_stack[depth - 1], name);
         }
 
-        snprintf(fullpath, sizeof(fullpath), "%s/%s", cwd, name);
-
-
-        if (line[depth * 2] == 'D') {
+        if (line[spaces] == 'D') {
             ensure_dir(fullpath);
-            strcpy(cwd, fullpath);
+            strcpy(dir_stack[depth], fullpath);
         } else {
             char blobpath[256];
-            snprintf(blobpath, sizeof(blobpath), ".bit/objects/blobs/%lu", hash);
+            snprintf(blobpath, sizeof(blobpath),
+                     ".bit/objects/blobs/%lu", hash);
 
             FILE *src = fopen(blobpath, "rb");
             FILE *dst = fopen(fullpath, "wb");
@@ -338,6 +345,9 @@ void restore_commit(const char *commit_id) {
             if (src) fclose(src);
             if (dst) fclose(dst);
         }
+
+        if (depth > max_depth)
+            max_depth = depth;
 
     } while (fgets(line, sizeof(line), fp));
 
