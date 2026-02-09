@@ -350,8 +350,13 @@ void restore_commit(const char *commit_id) {
 int main(int argc, char *argv[]) {
 
     if (argc < 2) {
-        printf("bit: <usage>\n");
-        printf("bit init\n");
+        printf("bit: usage:\n");
+        printf("  bit init\n");
+        printf("  bit add\n");
+        printf("  bit commit <message>\n");
+        printf("  bit log\n");
+        printf("  bit restore <commit_id>\n");
+        printf("  bit help\n");
         return 1;
     }
 
@@ -499,9 +504,20 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
+    else if (strcmp(argv[1], "help") == 0) {
+        printf("bit: usage:\n");
+        printf("  bit init\n");
+        printf("  bit add\n");
+        printf("  bit commit <message>\n");
+        printf("  bit log\n");
+        printf("  bit restore <commit_id>\n");
+        printf("  bit help\n");
+        return 0;
+    }
+
 
     /* ---------- UNKNOWN COMMAND ---------- */
-    printf("bit: Unknown command. Use `bit init`\n");
+    printf("bit: Unknown command '%s'. See `bit help`\n", argv[1]);
     return 1;
 }
 
