@@ -16,6 +16,18 @@ void ensure_dir(const char *path) {
     #endif
 }
 
+void delete_dir(const char *path) {
+#ifdef _WIN32
+    char cmd[500];
+    snprintf(cmd, sizeof(cmd), "rmdir /s /q \"%s\"", path);
+    system(cmd);
+#else
+    char cmd[500];
+    snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", path);
+    system(cmd);
+#endif
+}
+
 #include <sys/stat.h>
 #include <sys/types.h>
 typedef struct TreeNode {
@@ -278,6 +290,32 @@ void print_tree(TreeNode *node, int depth) {
         }
     }
 }
+
+void clean_working_directory() {
+    DIR *dir = opendir(".");
+    struct dirent *dp;
+    struct stat st;
+
+    if (!dir) return;
+
+    while ((dp = readdir(dir)) != NULL) {
+        if (strcmp(dp->d_name, ".") == 0 ||
+            strcmp(dp->d_name, "..") == 0 ||
+            strcmp(dp->d_name, ".bit") == 0)
+            continue;
+
+        if (stat(dp->d_name, &st) == -1) continue;
+
+        if (S_ISDIR(st.st_mode)) {
+            delete_dir(dp->d_name);
+        } else {
+            remove(dp->d_name);
+        }
+    }
+
+    closedir(dir);
+}
+
 void restore_commit(const char *commit_id) {
     char commit_path[256];
     snprintf(commit_path, sizeof(commit_path),
@@ -285,13 +323,14 @@ void restore_commit(const char *commit_id) {
 
     FILE *fp = fopen(commit_path, "r");
     if (!fp) {
-        printf("bit: commit not found\n");
+        printf("bit: Commit %s not found\n", commit_id);
         return;
     }
 
+    clean_working_directory();
+
     char line[512];
-    char dir_stack[50][4096];   // stack of directories by depth
-    int max_depth = 0;
+    char dir_stack[100][4096];
 
     // Skip metadata until tree starts
     while (fgets(line, sizeof(line), fp)) {
@@ -306,29 +345,27 @@ void restore_commit(const char *commit_id) {
 
         int depth = spaces / 2;
 
-        char type;
         char name[256];
         unsigned long hash = 0;
 
         if (line[spaces] == 'D') {
             sscanf(line + spaces, "D %255s", name);
+            if (depth == 0) {
+                snprintf(dir_stack[depth], sizeof(dir_stack[depth]), "%s", name);
+            } else {
+                snprintf(dir_stack[depth], sizeof(dir_stack[depth]), "%s/%s",
+                         dir_stack[depth - 1], name);
+            }
+            ensure_dir(dir_stack[depth]);
         } else {
             sscanf(line + spaces, "F %255s %lu", name, &hash);
-        }
-
-        char fullpath[4096];
-
-        if (depth == 0) {
-            snprintf(fullpath, sizeof(fullpath), "%s", name);
-        } else {
-            snprintf(fullpath, sizeof(fullpath), "%s/%s",
-                     dir_stack[depth - 1], name);
-        }
-
-        if (line[spaces] == 'D') {
-            ensure_dir(fullpath);
-            strcpy(dir_stack[depth], fullpath);
-        } else {
+            char fullpath[4096];
+            if (depth == 0) {
+                snprintf(fullpath, sizeof(fullpath), "%s", name);
+            } else {
+                snprintf(fullpath, sizeof(fullpath), "%s/%s",
+                         dir_stack[depth - 1], name);
+            }
             char blobpath[256];
             snprintf(blobpath, sizeof(blobpath),
                      ".bit/objects/blobs/%lu", hash);
@@ -345,9 +382,6 @@ void restore_commit(const char *commit_id) {
             if (src) fclose(src);
             if (dst) fclose(dst);
         }
-
-        if (depth > max_depth)
-            max_depth = depth;
 
     } while (fgets(line, sizeof(line), fp));
 
@@ -530,5 +564,3 @@ int main(int argc, char *argv[]) {
     printf("bit: Unknown command '%s'. See `bit help`\n", argv[1]);
     return 1;
 }
-
-
