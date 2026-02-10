@@ -7,6 +7,9 @@
 
 #ifdef _WIN32
     #include <direct.h>   // _mkdir
+    #include <windows.h>  // GetModuleFileNameA
+#else
+    #include <unistd.h>   // rmdir
 #endif
 void ensure_dir(const char *path) {
     #ifdef _WIN32
@@ -291,26 +294,61 @@ void print_tree(TreeNode *node, int depth) {
     }
 }
 
+static int is_dot_or_dotdot(const char *name) {
+    return strcmp(name, ".") == 0 || strcmp(name, "..") == 0;
+}
+
+static int should_preserve_entry(const char *name) {
+    return strcmp(name, ".bit") == 0 ||
+           strcmp(name, "bit") == 0 ||
+           strcmp(name, "bit.exe") == 0;
+}
+
+static int remove_path_recursive(const char *path) {
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        return -1;
+    }
+
+    if (S_ISDIR(st.st_mode)) {
+        DIR *dir = opendir(path);
+        struct dirent *dp;
+        if (!dir) return -1;
+
+        while ((dp = readdir(dir)) != NULL) {
+            if (is_dot_or_dotdot(dp->d_name)) continue;
+
+            char child[4096];
+#ifdef _WIN32
+            snprintf(child, sizeof(child), "%s\\%s", path, dp->d_name);
+#else
+            snprintf(child, sizeof(child), "%s/%s", path, dp->d_name);
+#endif
+            remove_path_recursive(child);
+        }
+        closedir(dir);
+#ifdef _WIN32
+        return _rmdir(path);
+#else
+        return rmdir(path);
+#endif
+    }
+
+    return remove(path);
+}
+
 void clean_working_directory() {
     DIR *dir = opendir(".");
     struct dirent *dp;
-    struct stat st;
 
     if (!dir) return;
 
     while ((dp = readdir(dir)) != NULL) {
-        if (strcmp(dp->d_name, ".") == 0 ||
-            strcmp(dp->d_name, "..") == 0 ||
-            strcmp(dp->d_name, ".bit") == 0)
+        if (is_dot_or_dotdot(dp->d_name) || should_preserve_entry(dp->d_name)) {
             continue;
-
-        if (stat(dp->d_name, &st) == -1) continue;
-
-        if (S_ISDIR(st.st_mode)) {
-            delete_dir(dp->d_name);
-        } else {
-            remove(dp->d_name);
         }
+
+        remove_path_recursive(dp->d_name);
     }
 
     closedir(dir);
@@ -318,8 +356,7 @@ void clean_working_directory() {
 
 void restore_commit(const char *commit_id) {
     char commit_path[256];
-    snprintf(commit_path, sizeof(commit_path),
-             ".bit/commits/%s.txt", commit_id);
+    snprintf(commit_path, sizeof(commit_path), ".bit/commits/%s.txt", commit_id);
 
     FILE *fp = fopen(commit_path, "r");
     if (!fp) {
@@ -329,61 +366,93 @@ void restore_commit(const char *commit_id) {
 
     clean_working_directory();
 
-    char line[512];
-    char dir_stack[100][4096];
+    char line[1024];
+    int found_tree = 0;
 
-    // Skip metadata until tree starts
     while (fgets(line, sizeof(line), fp)) {
-        if (line[0] == 'D' || line[0] == 'F')
+        if (strncmp(line, "Tree Snapshot:", 14) == 0) {
+            found_tree = 1;
             break;
+        }
     }
 
-    do {
+    if (!found_tree) {
+        fclose(fp);
+        return;
+    }
+
+    char dir_stack[256][4096];
+    int base_depth = -1;
+
+    while (fgets(line, sizeof(line), fp)) {
         int spaces = 0;
-        while (line[spaces] == ' ')
-            spaces++;
+        while (line[spaces] == ' ') spaces++;
 
-        int depth = spaces / 2;
+        if (line[spaces] != 'D' && line[spaces] != 'F') {
+            continue;
+        }
 
-        char name[256];
-        unsigned long hash = 0;
+        int raw_depth = spaces / 2;
+        if (base_depth < 0) base_depth = raw_depth;
+        int depth = raw_depth - base_depth;
+        if (depth < 0 || depth >= 256) continue;
 
         if (line[spaces] == 'D') {
-            sscanf(line + spaces, "D %255s", name);
+            char name[256];
+            if (sscanf(line + spaces, "D %255s", name) != 1) continue;
+
             if (depth == 0) {
-                snprintf(dir_stack[depth], sizeof(dir_stack[depth]), "%s", name);
+                if (strcmp(name, ".") == 0) {
+                    snprintf(dir_stack[depth], sizeof(dir_stack[depth]), ".");
+                } else {
+                    snprintf(dir_stack[depth], sizeof(dir_stack[depth]), "%s", name);
+                    ensure_dir(dir_stack[depth]);
+                }
             } else {
-                snprintf(dir_stack[depth], sizeof(dir_stack[depth]), "%s/%s",
-                         dir_stack[depth - 1], name);
+                if (strcmp(dir_stack[depth - 1], ".") == 0) {
+                    snprintf(dir_stack[depth], sizeof(dir_stack[depth]), "%s", name);
+                } else {
+                    char parent_path[4096];
+                    snprintf(parent_path, sizeof(parent_path), "%s", dir_stack[depth - 1]);
+#ifdef _WIN32
+                    snprintf(dir_stack[depth], sizeof(dir_stack[depth]), "%s\\%s", parent_path, name);
+#else
+                    snprintf(dir_stack[depth], sizeof(dir_stack[depth]), "%s/%s", parent_path, name);
+#endif
+                }
+                ensure_dir(dir_stack[depth]);
             }
-            ensure_dir(dir_stack[depth]);
         } else {
-            sscanf(line + spaces, "F %255s %lu", name, &hash);
-            char fullpath[4096];
-            if (depth == 0) {
-                snprintf(fullpath, sizeof(fullpath), "%s", name);
+            char name[256];
+            unsigned long hash;
+            if (sscanf(line + spaces, "F %255s %lu", name, &hash) != 2) continue;
+
+            char dst_path[4096];
+            if (depth <= 0 || strcmp(dir_stack[depth - 1], ".") == 0) {
+                snprintf(dst_path, sizeof(dst_path), "%s", name);
             } else {
-                snprintf(fullpath, sizeof(fullpath), "%s/%s",
-                         dir_stack[depth - 1], name);
+#ifdef _WIN32
+                snprintf(dst_path, sizeof(dst_path), "%s\\%s", dir_stack[depth - 1], name);
+#else
+                snprintf(dst_path, sizeof(dst_path), "%s/%s", dir_stack[depth - 1], name);
+#endif
             }
-            char blobpath[256];
-            snprintf(blobpath, sizeof(blobpath),
-                     ".bit/objects/blobs/%lu", hash);
 
-            FILE *src = fopen(blobpath, "rb");
-            FILE *dst = fopen(fullpath, "wb");
+            char blob_path[256];
+            snprintf(blob_path, sizeof(blob_path), ".bit/objects/blobs/%lu", hash);
 
+            FILE *src = fopen(blob_path, "rb");
+            FILE *dst = fopen(dst_path, "wb");
             if (src && dst) {
                 int c;
-                while ((c = fgetc(src)) != EOF)
+                while ((c = fgetc(src)) != EOF) {
                     fputc(c, dst);
+                }
             }
-
             if (src) fclose(src);
             if (dst) fclose(dst);
         }
-
-    } while (fgets(line, sizeof(line), fp));
+    }
 
     fclose(fp);
 }
