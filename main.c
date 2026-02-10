@@ -25,7 +25,10 @@ typedef struct TreeNode {
 
 /* ===================== FS HELPERS ===================== */
 
-void ensure_dir(const char *p) { MKDIR(p); }
+void ensure_dir(const char *p) {
+    if (MKDIR(p) != 0 && errno != EEXIST)
+        printf("[fs] failed to create directory %s (errno=%d)\n", p, errno);
+}
 
 void delete_dir(const char *path) {
 #ifdef _WIN32
@@ -175,11 +178,14 @@ void save_tree_object(TreeNode *root, const char *tree_id) {
 /* ===================== RESTORE ===================== */
 
 void restore_commit(const char *id) {
-    char commit_path[256], tree_id[64];
+    char commit_path[256], tree_id[64] = "";
     sprintf(commit_path, ".bit/commits/%s.txt", id);
 
     FILE *fp = fopen(commit_path, "r");
-    if (!fp) { puts("commit not found"); return; }
+    if (!fp) {
+        printf("[restore] commit not found: %s\n", commit_path);
+        return;
+    }
 
     char line[256];
     while (fgets(line, sizeof(line), fp))
@@ -187,13 +193,24 @@ void restore_commit(const char *id) {
             break;
     fclose(fp);
 
+    if (!tree_id[0]) {
+        puts("[restore] tree id missing in commit metadata");
+        return;
+    }
+
     clean_working_directory();
 
     char tree_path[256];
     sprintf(tree_path, ".bit/objects/trees/%s.txt", tree_id);
     fp = fopen(tree_path, "r");
+    if (!fp) {
+        printf("[restore] tree object not found: %s\n", tree_path);
+        return;
+    }
 
     char stack[50][512];
+    memset(stack, 0, sizeof(stack));
+
     while (fgets(line, sizeof(line), fp)) {
         int sp = 0;
         while (line[sp] == ' ') sp++;
@@ -203,22 +220,48 @@ void restore_commit(const char *id) {
         unsigned long h;
 
         if (line[sp] == 'D') {
-            sscanf(line + sp, "D %s", name);
-            if (depth == 0) strcpy(stack[0], name);
-            else sprintf(stack[depth], "%s/%s", stack[depth-1], name);
+            if (sscanf(line + sp, "D %255s", name) != 1) continue;
+
+            if (depth == 0) {
+                snprintf(stack[0], sizeof(stack[0]), "%s", name);
+            } else {
+                char parent_path[512];
+                snprintf(parent_path, sizeof(parent_path), "%s", stack[depth-1]);
+                snprintf(stack[depth], sizeof(stack[depth]), "%s/%s", parent_path, name);
+            }
+
             ensure_dir(stack[depth]);
-        } else {
-            sscanf(line + sp, "F %s %lu", name, &h);
+            printf("[restore] mkdir %s\n", stack[depth]);
+        } else if (line[sp] == 'F') {
+            if (sscanf(line + sp, "F %255s %lu", name, &h) != 2) continue;
+
             char dst[512];
-            sprintf(dst, "%s/%s", stack[depth-1], name);
+            if (depth == 0)
+                snprintf(dst, sizeof(dst), "%s", name);
+            else
+                snprintf(dst, sizeof(dst), "%s/%s", stack[depth-1], name);
+
             char blob[256];
             sprintf(blob, ".bit/objects/blobs/%lu", h);
 
-            FILE *s = fopen(blob, "rb");
-            FILE *d = fopen(dst, "wb");
+            FILE *src = fopen(blob, "rb");
+            if (!src) {
+                printf("[restore] missing blob %s for %s\n", blob, dst);
+                continue;
+            }
+
+            FILE *dstf = fopen(dst, "wb");
+            if (!dstf) {
+                printf("[restore] failed to create file %s\n", dst);
+                fclose(src);
+                continue;
+            }
+
             int c;
-            while ((c = fgetc(s)) != EOF) fputc(c, d);
-            fclose(s); fclose(d);
+            while ((c = fgetc(src)) != EOF) fputc(c, dstf);
+            fclose(src);
+            fclose(dstf);
+            printf("[restore] wrote %s from blob %lu\n", dst, h);
         }
     }
     fclose(fp);
@@ -296,20 +339,43 @@ void print_log() {
     puts("[log] Reached root commit.");
 }
 
+void print_help() {
+    puts("bit - tiny vcs");
+    puts("Usage:");
+    puts("  bit init                 Initialize repository");
+    puts("  bit commit <message>     Create commit");
+    puts("  bit log                  Show complete commit history");
+    puts("  bit restore <commit-id>  Restore working tree to commit");
+    puts("  bit help                 Show this help");
+}
+
 /* ===================== MAIN ===================== */
 
 int main(int argc, char **argv) {
-    if (argc < 2) return 0;
+    if (argc < 2) { print_help(); return 0; }
+
+    srand((unsigned)time(NULL));
 
     srand((unsigned)time(NULL));
 
     if (!strcmp(argv[1], "init")) {
+        FILE *head = fopen(".bit/HEAD", "r");
+        if (head) {
+            fclose(head);
+            puts("Repository already initialized");
+            return 0;
+        }
+
         ensure_dir(".bit");
         ensure_dir(".bit/objects");
         ensure_dir(".bit/objects/blobs");
         ensure_dir(".bit/objects/trees");
         ensure_dir(".bit/commits");
         FILE *h = fopen(".bit/HEAD", "w");
+        if (!h) {
+            puts("Failed to initialize repository");
+            return 1;
+        }
         fprintf(h, "None");
         fclose(h);
         puts("Initialized repository");
@@ -372,6 +438,16 @@ int main(int argc, char **argv) {
         printf("[restore] restoring commit id=%s\n", argv[2]);
         restore_commit(argv[2]);
         puts("Restored");
+    }
+
+    else if (!strcmp(argv[1], "help")) {
+        print_help();
+    }
+
+    else {
+        printf("Unknown command: %s\n", argv[1]);
+        print_help();
+        return 1;
     }
 
     return 0;
