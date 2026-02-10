@@ -158,8 +158,10 @@ void save_tree(TreeNode *n, FILE *fp, int depth) {
 }
 
 void gen_id(char *out) {
-    static int c = 0;
-    sprintf(out, "%lu_%d", (unsigned long)time(NULL), ++c);
+    /* Make IDs unique across separate process runs. */
+    unsigned long t = (unsigned long)time(NULL);
+    unsigned long r = (unsigned long)rand();
+    sprintf(out, "%lu_%lu", t, r);
 }
 
 void save_tree_object(TreeNode *root, const char *tree_id) {
@@ -226,19 +228,45 @@ void restore_commit(const char *id) {
 
 void print_log() {
     FILE *h = fopen(".bit/HEAD", "r");
-    if (!h) { puts("No commits"); return; }
+    if (!h) {
+        puts("[log] No commits (.bit/HEAD missing)");
+        return;
+    }
 
     char current[64];
-    fgets(current, sizeof(current), h);
+    if (!fgets(current, sizeof(current), h)) {
+        puts("[log] Failed to read .bit/HEAD");
+        fclose(h);
+        return;
+    }
     current[strcspn(current, "\n")] = 0;
     fclose(h);
 
+    printf("[log] Starting from HEAD=%s\n", current);
+
+    char visited[512][64];
+    int visited_count = 0;
+
     while (strcmp(current, "None") != 0) {
+        int i;
+        for (i = 0; i < visited_count; i++) {
+            if (!strcmp(visited[i], current)) {
+                printf("[log] ERROR: Detected commit cycle at %s\n", current);
+                puts("[log] Stopping log traversal to prevent infinite loop.");
+                return;
+            }
+        }
+        if (visited_count < 512) strcpy(visited[visited_count++], current);
         char path[256], parent[64] = "None", msg[256], timebuf[64];
         sprintf(path, ".bit/commits/%s.txt", current);
 
+        printf("[log] Reading commit file: %s\n", path);
+
         FILE *fp = fopen(path, "r");
-        if (!fp) break;
+        if (!fp) {
+            printf("[log] ERROR: could not open %s\n", path);
+            break;
+        }
 
         char line[256];
         printf("Commit: %s\n", current);
@@ -248,18 +276,32 @@ void print_log() {
                 printf("Time: %s\n", timebuf);
             else if (sscanf(line, "Message: %255[^\n]", msg) == 1)
                 printf("Message: %s\n", msg);
+
+            /* Backward compatible parse for malformed one-line
+               "Parent: <id>Time: ..." entries from older commits. */
+            if (!strncmp(line, "Parent:", 7) && strstr(line, "Time:")) {
+                if (sscanf(line, "Parent: %63[^T]", parent) == 1) {
+                    parent[strcspn(parent, " \t\n")] = 0;
+                    printf("[log] parsed legacy parent=%s\n", parent);
+                }
+            }
         }
         printf("\n");
         fclose(fp);
 
+        printf("[log] Moving to parent=%s\n", parent);
         strcpy(current, parent);
     }
+
+    puts("[log] Reached root commit.");
 }
 
 /* ===================== MAIN ===================== */
 
 int main(int argc, char **argv) {
     if (argc < 2) return 0;
+
+    srand((unsigned)time(NULL));
 
     if (!strcmp(argv[1], "init")) {
         ensure_dir(".bit");
@@ -276,16 +318,26 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[1], "commit")) {
         if (argc < 3) { puts("commit message required"); return 1; }
 
+        printf("[commit] Building tree from working directory\n");
+
         TreeNode *tree = build_tree(".");
         char tree_id[64], commit_id[64];
         gen_id(tree_id);
         gen_id(commit_id);
 
+        printf("[commit] tree_id=%s commit_id=%s\n", tree_id, commit_id);
+
         save_tree_object(tree, tree_id);
 
         char parent[64] = "None";
         FILE *h = fopen(".bit/HEAD", "r");
-        if (h) { fgets(parent, sizeof(parent), h); fclose(h); }
+        if (h) {
+            fgets(parent, sizeof(parent), h);
+            parent[strcspn(parent, "\n")] = 0;
+            fclose(h);
+        }
+
+        printf("[commit] parent=%s\n", parent);
 
         char path[256];
         sprintf(path, ".bit/commits/%s.txt", commit_id);
@@ -293,7 +345,7 @@ int main(int argc, char **argv) {
 
         time_t now = time(NULL);
         fprintf(fp,
-            "Commit: %s\nParent: %sTime: %sMessage: %s\nTree: %s\n",
+            "Commit: %s\nParent: %s\nTime: %sMessage: %s\nTree: %s\n",
             commit_id, parent,
             ctime(&now),
             argv[2],
@@ -313,10 +365,14 @@ int main(int argc, char **argv) {
     }
 
     else if (!strcmp(argv[1], "restore")) {
+        if (argc < 3) {
+            puts("restore commit id required");
+            return 1;
+        }
+        printf("[restore] restoring commit id=%s\n", argv[2]);
         restore_commit(argv[2]);
         puts("Restored");
     }
 
     return 0;
 }
-
