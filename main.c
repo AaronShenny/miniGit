@@ -356,6 +356,8 @@ int main(int argc, char **argv) {
 
     srand((unsigned)time(NULL));
 
+    srand((unsigned)time(NULL));
+
     if (!strcmp(argv[1], "init")) {
         FILE *head = fopen(".bit/HEAD", "r");
         if (head) {
